@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  bountybot:
+    container_name: fracture-bounty-bot
+    build: .
+    environment:
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - OWNER_ID=${OWNER_ID}
+      - TEST_GUILD_ID=${TEST_GUILD_ID}
+      - DATA_FILE=bounties.json
+    volumes:
+      - ./bounties.json:/app/bounties.json
+    restart: unless-stopped
