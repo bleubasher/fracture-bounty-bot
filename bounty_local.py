@@ -70,6 +70,12 @@ print(f"Current bounties: {bounties}")
 print(f"OWNER_ID (from env) = {OWNER_ID}")
 print(f"AUTHORIZED_USERS at load = {authorized_users}")
 
+# after loading GUILD_ID
+from typing import Optional  # for Python 3.10 compatibility
+
+GUILD_OBJ = discord.Object(id=int(GUILD_ID)) if GUILD_ID else None
+
+
 # -------------------- AUTH HELPERS --------------------
 def is_authorized(user_id: int) -> bool:
     return user_id in authorized_users
@@ -175,18 +181,25 @@ async def setup_hook():
     try:
         if GUILD_ID:
             guild = discord.Object(id=int(GUILD_ID))
-            # Clear only the guild's commands first (prevents ghost entries)
-            bot.tree.clear_commands(guild=guild)
-            # Re-register (decorators have already populated the tree)
-            await bot.tree.sync(guild=guild)
-            print(f"Cleared & synced commands to guild: {GUILD_ID}")
-        else:
-            # Global sync (can take a while to propagate)
-            await bot.tree.sync()
-            print("Synced commands globally (may take time to appear)")
-    except Exception as e:
-        print("Slash command sync failed:", e)
 
+            # 1) Clear ONLY this guild's commands (removes any stale guild entries)
+            bot.tree.clear_commands(guild=guild)   # note: no await
+
+            # 2) Copy your global decorators into this guild scope
+            #    (Works whether your decorators are global or a mix)
+            bot.tree.copy_global_to(guild=guild)
+
+            # 3) Sync the guild (fast propagation)
+            cmds = await bot.tree.sync(guild=guild)
+            print(f"✅ Guild sync complete: {len(cmds)} commands → {GUILD_ID}")
+        else:
+            # Global sync (slower)
+            cmds = await bot.tree.sync()
+            print(f"✅ Global sync complete: {len(cmds)} commands")
+    except Exception as e:
+        import traceback
+        print("❌ Slash command sync failed:", e)
+        traceback.print_exc()
 
 
 # -------------------- COMMANDS --------------------
@@ -222,15 +235,29 @@ async def bounty_time(interaction: discord.Interaction):
 
 
 # 1) /bounty_channel — Set or update the default channel (authorized only)
-@tree.command(name="bounty_channel", description="Set the default channel where bounty messages are posted.")
-@app_commands.describe(channel="Pick the channel where bounty messages should go by default")
-async def bounty_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+@tree.command(name="bounty_channel", description="Set the channel for bounties to post")
+@app_commands.describe(channel="Optional: choose a channel; defaults to the current one")
+async def bounty_channel(interaction: discord.Interaction, channel: discord.TextChannel | None = None):
     if not is_authorized(interaction.user.id):
-        await interaction.response.send_message("You are not authorized to change the bounty channel.", ephemeral=True)
+        await interaction.response.send_message("Only Depth can setup bounties for The Chase.", ephemeral=True)
         return
 
-    set_default_channel(channel.id)
-    await interaction.response.send_message(f"Default bounty channel set to {channel.mention}.", ephemeral=True)
+    target_channel = channel or interaction.channel
+    channel_id = target_channel.id
+
+    # If you're still using the legacy '__CHANNEL_SET__' marker:
+    bounties.append({
+        "message": "__CHANNEL_SET__",
+        "post_time": "2099-12-31 23:59",
+        "channel_id": channel_id
+    })
+    save_data()
+
+    await interaction.response.send_message(
+        f"Channel set to <#{channel_id}> for future bounties.",
+        ephemeral=True
+    )
+
 
 
 # 2) /bounty_now — send immediately (authorized only)
@@ -261,6 +288,7 @@ async def bounty_now(interaction: discord.Interaction, message: str, channel: di
 
 
 # 3) /bounty_new — schedule for specific UTC time (authorized only)
+
 @tree.command(name="bounty_new", description="Schedule a bounty message for a future UTC time.")
 @app_commands.describe(
     message="Message to post",
