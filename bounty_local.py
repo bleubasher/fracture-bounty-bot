@@ -102,6 +102,20 @@ def get_default_channel_id() -> int | None:
         if b.get("message") == CHANNEL_MARKER and "channel_id" in b:
             return b["channel_id"]
     return None
+    
+def chunk_lines(lines, max_len=1900):
+    blocks, cur = [], ""
+    for line in lines:
+        # +1 for newline if cur isn't empty
+        add_len = len(line) + (1 if cur else 0)
+        if len(cur) + add_len > max_len:
+            blocks.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        blocks.append(cur)
+    return blocks
 
 
 # -------------------- SCHEDULER --------------------
@@ -201,7 +215,6 @@ async def setup_hook():
         print("❌ Slash command sync failed:", e)
         traceback.print_exc()
 
-
 # -------------------- COMMANDS --------------------
 @tree.command(name="bounty", description="Show bounty bot command help")
 async def bounty_help(interaction: discord.Interaction):
@@ -257,7 +270,6 @@ async def bounty_channel(interaction: discord.Interaction, channel: discord.Text
         f"Channel set to <#{channel_id}> for future bounties.",
         ephemeral=True
     )
-
 
 
 # 2) /bounty_now — send immediately (authorized only)
@@ -327,22 +339,40 @@ async def bounty_new(interaction: discord.Interaction, message: str, post_time: 
 
 
 # 4) /bounty_list — list pending/sent bounties
-@tree.command(name="bounty_list", description="List all scheduled bounties and their status.")
+@tree.command(name="bounty_list", description="List all scheduled bounties")
 async def bounty_list(interaction: discord.Interaction):
-    # Visibility: everyone can view (change to auth-only if desired)
-    visible = [b for b in bounties if b.get("message") != CHANNEL_MARKER]
-    if not visible:
+    if not is_authorized(interaction.user.id):
+        await interaction.response.send_message(
+            "Only Depth can setup bounties for The Chase.", ephemeral=True
+        )
+        return
+
+    active = [b for b in bounties if b.get("message") != "__CHANNEL_SET__"]
+    if not active:
         await interaction.response.send_message("No bounties scheduled.", ephemeral=True)
         return
 
-    lines = []
-    for b in visible:
-        status = "sent ✅" if b.get("sent") else "pending ⏳"
-        when = b.get("post_time", "now")
-        ch = b.get("channel_id")
-        lines.append(f"- [{status}] {when} → {b.get('message')} (channel_id={ch})")
+    # Sort by time if present, otherwise keep insertion order
+    def _key(b):
+        try:
+            return datetime.strptime(b["post_time"], "%Y-%m-%d %H:%M")
+        except Exception:
+            return datetime.max
+    active.sort(key=_key)
 
-    await interaction.response.send_message("\n".join(lines), ephemeral=True)
+    lines = [
+        f"**{b.get('post_time','?')} UTC** — {b.get('message','(no message)')}" + (" ✅" if b.get("sent") else "")
+        for b in active
+    ]
+
+    blocks = chunk_lines(lines, max_len=1900)
+
+    # Send first chunk as the initial response
+    await interaction.response.send_message(blocks[0], ephemeral=True)
+
+    # Send remaining chunks as follow-ups (still ephemeral)
+    for block in blocks[1:]:
+        await interaction.followup.send(block, ephemeral=True)
 
 
 # 5) /bounty_auth — add an authorized user (owner only)
