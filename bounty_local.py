@@ -18,10 +18,6 @@ DATA_FILE = os.getenv("DATA_FILE", "bounties.json")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("TEST_GUILD_ID")  # fast guild sync when set
 
-# 2. -------------------- BOT SETUP --------------------
-client = discord.Client(intents=discord.Intents.default())
-tree = app_commands.CommandTree(client)
-
 # 3. -------------------- COMMANDS --------------------
 # (Your actual @tree.command blocks will start down here!)
 print(f"Loaded OWNER_ID: {OWNER_ID}")
@@ -31,8 +27,9 @@ print(f"Discord Token present: {bool(DISCORD_TOKEN)}")
 
 # -------------------- DISCORD CLIENT --------------------
 intents = discord.Intents.default()
-intents.message_content = True  # Add this line!
+intents.message_content = True  
 bot = commands.Bot(command_prefix="/", intents=intents)
+tree = bot.tree
 
 # -------------------- STORAGE --------------------
 bounties = []          # list of {id, message, post_time(optional), channel_id, sent}
