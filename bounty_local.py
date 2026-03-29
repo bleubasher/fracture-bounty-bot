@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 import json
 import asyncio
+import uuid
 from datetime import datetime
 
 import discord
@@ -25,15 +26,52 @@ print(f"Discord Token present: {bool(DISCORD_TOKEN)}")
 
 # -------------------- DISCORD CLIENT --------------------
 intents = discord.Intents.default()
+intents.message_content = True  # Add this line!
 bot = commands.Bot(command_prefix="/", intents=intents)
-tree = bot.tree
 
 # -------------------- STORAGE --------------------
-bounties = []          # list of {message, post_time(optional), channel_id, sent}
+bounties = []          # list of {id, message, post_time(optional), channel_id, sent}
 authorized_users = []  # list of user IDs
 
 # Special marker item to store default channel
 CHANNEL_MARKER = "__CHANNEL_SET__"
+
+
+def _normalize_bounties_after_load() -> bool:
+    """Merge duplicate channel markers; assign stable id to each real bounty row."""
+    global bounties
+    changed = False
+    markers = [b for b in bounties if b.get("message") == CHANNEL_MARKER]
+    rest = [b for b in bounties if b.get("message") != CHANNEL_MARKER]
+
+    for b in rest:
+        if not b.get("id"):
+            b["id"] = str(uuid.uuid4())
+            changed = True
+
+    if len(markers) > 1:
+        channel_id = None
+        for m in markers:
+            if m.get("channel_id") is not None:
+                channel_id = m["channel_id"]
+        bounties = [
+            {"message": CHANNEL_MARKER, "channel_id": channel_id, "sent": True},
+            *rest,
+        ]
+        changed = True
+    elif len(markers) == 1:
+        m = markers[0]
+        if "post_time" in m:
+            del m["post_time"]
+            changed = True
+        if not m.get("sent", True):
+            m["sent"] = True
+            changed = True
+        bounties = [m, *rest]
+    else:
+        bounties = rest
+
+    return changed
 
 
 def load_data():
@@ -50,6 +88,9 @@ def load_data():
             if OWNER_ID not in authorized:
                 authorized.append(OWNER_ID)
             authorized_users[:] = authorized  # mutate in place
+
+    if _normalize_bounties_after_load():
+        save_data()
 
 
 def save_data():
@@ -87,13 +128,15 @@ def is_owner(user_id: int) -> bool:
 
 # -------------------- DEFAULT CHANNEL HELPERS --------------------
 def set_default_channel(channel_id: int):
-    """Create/update the special marker entry holding default channel."""
+    """Create/update the single marker entry holding default channel."""
     for b in bounties:
         if b.get("message") == CHANNEL_MARKER:
             b["channel_id"] = channel_id
+            b["sent"] = True
+            b.pop("post_time", None)
             save_data()
             return
-    bounties.append({"message": CHANNEL_MARKER, "channel_id": channel_id, "sent": True})
+    bounties.insert(0, {"message": CHANNEL_MARKER, "channel_id": channel_id, "sent": True})
     save_data()
 
 
@@ -120,48 +163,51 @@ def chunk_lines(lines, max_len=1900):
 
 # -------------------- SCHEDULER --------------------
 scheduled_tasks: list[asyncio.Task] = []
+bounty_tasks_inflight: set[str] = set()
 
 
-def schedule_bounty(message: str, post_time: str | None, channel_id: int):
+def schedule_bounty(bounty_id: str, message: str, post_time: str | None, channel_id: int):
+    if bounty_id in bounty_tasks_inflight:
+        return
+    bounty_tasks_inflight.add(bounty_id)
+
     async def send_later():
-        # Determine delay or send immediately if in the past
-        if post_time:
-            try:
-                target = datetime.strptime(post_time, "%Y-%m-%d %H:%M")
-            except ValueError:
-                # If stored time somehow invalid, just send now
-                target = datetime.utcnow()
-            now = datetime.utcnow()
-            delay = (target - now).total_seconds()
-            if delay > 0:
-                await asyncio.sleep(delay)
+        try:
+            # Determine delay or send immediately if in the past
+            if post_time:
+                try:
+                    target = datetime.strptime(post_time, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    # If stored time somehow invalid, just send now
+                    target = datetime.utcnow()
+                now = datetime.utcnow()
+                delay = (target - now).total_seconds()
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
-        # Post the message
-        channel = bot.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(channel_id)
-            except Exception as e:
-                print(f"Failed to fetch channel {channel_id}: {e}")
+            # Post the message
+            channel = bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except Exception as e:
+                    print(f"Failed to fetch channel {channel_id}: {e}")
 
-        if channel:
-            try:
-                await channel.send(message)
-            except Exception as e:
-                print(f"Error sending message to {channel_id}: {e}")
+            if channel:
+                try:
+                    await channel.send(message)
+                except Exception as e:
+                    print(f"Error sending message to {channel_id}: {e}")
 
-        # Mark as sent
-        for bounty in bounties:
-            if (
-                bounty.get("message") == message
-                and bounty.get("channel_id") == channel_id
-                and (not post_time or bounty.get("post_time") == post_time)
-                and not bounty.get("sent")
-            ):
-                bounty["sent"] = True
-                break
+            # Mark as sent by stable id
+            for bounty in bounties:
+                if bounty.get("id") == bounty_id and not bounty.get("sent"):
+                    bounty["sent"] = True
+                    break
 
-        save_data()
+            save_data()
+        finally:
+            bounty_tasks_inflight.discard(bounty_id)
 
     task = asyncio.create_task(send_later())
     scheduled_tasks.append(task)
@@ -171,12 +217,16 @@ def schedule_bounty(message: str, post_time: str | None, channel_id: int):
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    # Reschedule pending bounties
+    # Reschedule pending bounties (schedule_bounty dedupes by bounty id / reconnect)
     for bounty in bounties:
         if bounty.get("message") == CHANNEL_MARKER:
             continue
         if not bounty.get("sent"):
+            bid = bounty.get("id")
+            if not bid:
+                continue
             schedule_bounty(
+                bid,
                 bounty.get("message"),
                 bounty.get("post_time"),  # may be None for immediate
                 bounty.get("channel_id"),
@@ -258,13 +308,7 @@ async def bounty_channel(interaction: discord.Interaction, channel: discord.Text
     target_channel = channel or interaction.channel
     channel_id = target_channel.id
 
-    # If you're still using the legacy '__CHANNEL_SET__' marker:
-    bounties.append({
-        "message": "__CHANNEL_SET__",
-        "post_time": "2099-12-31 23:59",
-        "channel_id": channel_id
-    })
-    save_data()
+    set_default_channel(channel_id)
 
     await interaction.response.send_message(
         f"Channel set to <#{channel_id}> for future bounties.",
@@ -288,13 +332,18 @@ async def bounty_now(interaction: discord.Interaction, message: str, channel: di
         )
         return
 
-    # Save a record as already-sent immediate bounty (optional)
-    entry = {"message": message, "post_time": None, "channel_id": chan_id, "sent": False}
+    entry = {
+        "id": str(uuid.uuid4()),
+        "message": message,
+        "post_time": None,
+        "channel_id": chan_id,
+        "sent": False,
+    }
     bounties.append(entry)
     save_data()
 
     # Schedule with no delay → sends now
-    schedule_bounty(message, None, chan_id)
+    schedule_bounty(entry["id"], message, None, chan_id)
 
     await interaction.response.send_message("Bounty posted.", ephemeral=True)
 
@@ -330,10 +379,16 @@ async def bounty_new(interaction: discord.Interaction, message: str, post_time: 
         )
         return
 
-    # Save and schedule
-    bounties.append({"message": message, "post_time": post_time, "channel_id": chan_id, "sent": False})
+    entry = {
+        "id": str(uuid.uuid4()),
+        "message": message,
+        "post_time": post_time,
+        "channel_id": chan_id,
+        "sent": False,
+    }
+    bounties.append(entry)
     save_data()
-    schedule_bounty(message, post_time, chan_id)
+    schedule_bounty(entry["id"], message, post_time, chan_id)
 
     await interaction.response.send_message(f"Scheduled bounty for `{post_time} UTC`.", ephemeral=True)
 
@@ -347,7 +402,7 @@ async def bounty_list(interaction: discord.Interaction):
         )
         return
 
-    active = [b for b in bounties if b.get("message") != "__CHANNEL_SET__"]
+    active = [b for b in bounties if b.get("message") != CHANNEL_MARKER]
     if not active:
         await interaction.response.send_message("No bounties scheduled.", ephemeral=True)
         return
