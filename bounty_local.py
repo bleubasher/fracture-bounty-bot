@@ -9,6 +9,16 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+# 1. Create the client/bot first
+client = discord.Client(intents=discord.Intents.default())
+
+# 2. Create the tree second (THIS IS WHAT'S LIKELY MISSING)
+tree = app_commands.CommandTree(client)
+
+# 3. Now you can use the @tree.command decorators
+@tree.command(name="bounty", description="Show bounty bot command help")
+async def bounty_help(interaction: discord.Interaction):
+
 # -------------------- ENV / CONFIG --------------------
 load_dotenv()
 
