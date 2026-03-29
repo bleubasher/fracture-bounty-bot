@@ -26,8 +26,8 @@ print(f"Discord Token present: {bool(DISCORD_TOKEN)}")
 
 # -------------------- DISCORD CLIENT --------------------
 intents = discord.Intents.default()
+intents.message_content = True  # Add this line!
 bot = commands.Bot(command_prefix="/", intents=intents)
-tree = bot.tree
 
 # -------------------- STORAGE --------------------
 bounties = []          # list of {id, message, post_time(optional), channel_id, sent}
