@@ -38,6 +38,9 @@ authorized_users = []  # list of user IDs
 # Special marker item to store default channel
 CHANNEL_MARKER = "__CHANNEL_SET__"
 
+# Bounty posts often include role/user pings; do not enable @everyone.
+BOUNTY_ALLOWED_MENTIONS = discord.AllowedMentions(everyone=True, roles=True, users=True)
+
 
 def _normalize_bounties_after_load() -> bool:
     """Merge duplicate channel markers; assign stable id to each real bounty row."""
@@ -197,7 +200,7 @@ def schedule_bounty(bounty_id: str, message: str, post_time: str | None, channel
 
             if channel:
                 try:
-                    await channel.send(message, allowed_mentions=mentions)
+                    await channel.send(message, allowed_mentions=BOUNTY_ALLOWED_MENTIONS)
                 except Exception as e:
                     print(f"Error sending message to {channel_id}: {e}")
 
