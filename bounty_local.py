@@ -197,7 +197,7 @@ def schedule_bounty(bounty_id: str, message: str, post_time: str | None, channel
 
             if channel:
                 try:
-                    await channel.send(message)
+                    await channel.send(message, allowed_mentions=mentions)
                 except Exception as e:
                     print(f"Error sending message to {channel_id}: {e}")
 
