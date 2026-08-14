@@ -487,7 +487,7 @@ async def bounty_test(interaction: discord.Interaction):
         await interaction.response.send_message("You are not authorized to run the systems check.", ephemeral=True)
         return
 
-    # Get the default channel for Part 2
+    # Get the default channel from the JSON file
     default_chan_id = get_default_channel_id()
     if not default_chan_id:
         await interaction.response.send_message(
@@ -496,16 +496,13 @@ async def bounty_test(interaction: discord.Interaction):
         )
         return
 
-    # Get the channel where the command was currently run for Part 1
-    current_chan_id = interaction.channel.id
-
-    # --- Part 1: Immediate message in current channel ---
+    # --- Part 1: Immediate message in the default channel ---
     msg_part1 = "This is part 1 of Depth's Bounty bot automated systems check. Please standby for part 2."
     entry1 = {
         "id": str(uuid.uuid4()),
         "message": msg_part1,
         "post_time": None,
-        "channel_id": current_chan_id,
+        "channel_id": default_chan_id,  # <-- FIXED: Now uses the JSON channel
         "sent": False,
     }
     bounties.append(entry1)
@@ -518,14 +515,14 @@ async def bounty_test(interaction: discord.Interaction):
     )
     
     # Calculate 3 minutes in the future (UTC)
-    post_time_dt = datetime.utcnow() + timedelta(minutes=3)
+    post_time_dt = datetime.utcnow() + timedelta(minutes=1)
     post_time_str = post_time_dt.strftime("%Y-%m-%d %H:%M")
 
     entry2 = {
         "id": str(uuid.uuid4()),
         "message": msg_part2,
         "post_time": post_time_str,
-        "channel_id": default_chan_id,
+        "channel_id": default_chan_id,  # Uses the JSON channel
         "sent": False,
     }
     bounties.append(entry2)
@@ -533,14 +530,14 @@ async def bounty_test(interaction: discord.Interaction):
     # Save data for both entries to JSON
     save_data()
 
-    # Schedule both messages via the bot's scheduling loop
-    schedule_bounty(entry1["id"], msg_part1, None, current_chan_id)
+    # Schedule both messages via the bot's scheduling loop to the JSON channel
+    schedule_bounty(entry1["id"], msg_part1, None, default_chan_id)
     schedule_bounty(entry2["id"], msg_part2, post_time_str, default_chan_id)
 
     # Respond ephemerally to the user who ran the command
     await interaction.response.send_message(
         f"Automated systems check initiated.\n"
-        f"Part 1 sent to <#{current_chan_id}>.\n"
+        f"Part 1 sent to <#{default_chan_id}>.\n"
         f"Part 2 scheduled for `{post_time_str} UTC` in <#{default_chan_id}>.", 
         ephemeral=True
     )
