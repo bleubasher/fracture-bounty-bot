@@ -3,14 +3,15 @@ import os
 import json
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-# 1. -------------------- ENV / CONFIG --------------------
+# -------------------- ENV / CONFIG --------------------
 load_dotenv()
+
 print("🔥 Bounty bot starting up")
 
 OWNER_ID = int(os.getenv("OWNER_ID", "217324902447841282"))
@@ -18,8 +19,6 @@ DATA_FILE = os.getenv("DATA_FILE", "bounties.json")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GUILD_ID = os.getenv("TEST_GUILD_ID")  # fast guild sync when set
 
-# 3. -------------------- COMMANDS --------------------
-# (Your actual @tree.command blocks will start down here!)
 print(f"Loaded OWNER_ID: {OWNER_ID}")
 print(f"Loaded GUILD_ID: {GUILD_ID}")
 print(f"Loaded DATA_FILE: {DATA_FILE}")
@@ -27,7 +26,6 @@ print(f"Discord Token present: {bool(DISCORD_TOKEN)}")
 
 # -------------------- DISCORD CLIENT --------------------
 intents = discord.Intents.default()
-intents.message_content = True  
 bot = commands.Bot(command_prefix="/", intents=intents)
 tree = bot.tree
 
@@ -289,6 +287,7 @@ async def bounty_help(interaction: discord.Interaction):
         "`/bounty_deauth <user>` — Remove a user's authorization. (Owner only)\n"
         "`/bounty_who` — View all currently authorized users.\n"
         "`/bounty_time` — View the current UTC time.\n"
+        "`/bounty_test` — Run an automated systems check to verify bot functions.\n"
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -478,6 +477,71 @@ async def bounty_who(interaction: discord.Interaction):
     mentions = [f"<@{uid}>" for uid in authorized_users]
     await interaction.response.send_message(
         f"Authorized users ({len(mentions)}): " + ", ".join(mentions),
+        ephemeral=True
+    )
+    
+# 8) /bounty_test — automated systems check (authorized only)
+@tree.command(name="bounty_test", description="Run an automated systems check for bounty posting.")
+async def bounty_test(interaction: discord.Interaction):
+    if not is_authorized(interaction.user.id):
+        await interaction.response.send_message("You are not authorized to run the systems check.", ephemeral=True)
+        return
+
+    # Get the default channel for Part 2
+    default_chan_id = get_default_channel_id()
+    if not default_chan_id:
+        await interaction.response.send_message(
+            "No default channel set. Use `/bounty_channel` first before running the test.",
+            ephemeral=True
+        )
+        return
+
+    # Get the channel where the command was currently run for Part 1
+    current_chan_id = interaction.channel.id
+
+    # --- Part 1: Immediate message in current channel ---
+    msg_part1 = "This is part 1 of Depth's Bounty bot automated systems check. Please standby for part 2."
+    entry1 = {
+        "id": str(uuid.uuid4()),
+        "message": msg_part1,
+        "post_time": None,
+        "channel_id": current_chan_id,
+        "sent": False,
+    }
+    bounties.append(entry1)
+
+    # --- Part 2: Scheduled message 3 minutes from now in the default channel ---
+    msg_part2 = (
+        "This is part 2 of Depth's Bounty Bot automated systems check. If both of these messages have posted "
+        "and there are no errors, Depth is not a moron. If something is fucked up, or there are errors in the log, "
+        "Depth is a moron and needs to go fix things. Thank you for your time."
+    )
+    
+    # Calculate 3 minutes in the future (UTC)
+    post_time_dt = datetime.utcnow() + timedelta(minutes=3)
+    post_time_str = post_time_dt.strftime("%Y-%m-%d %H:%M")
+
+    entry2 = {
+        "id": str(uuid.uuid4()),
+        "message": msg_part2,
+        "post_time": post_time_str,
+        "channel_id": default_chan_id,
+        "sent": False,
+    }
+    bounties.append(entry2)
+
+    # Save data for both entries to JSON
+    save_data()
+
+    # Schedule both messages via the bot's scheduling loop
+    schedule_bounty(entry1["id"], msg_part1, None, current_chan_id)
+    schedule_bounty(entry2["id"], msg_part2, post_time_str, default_chan_id)
+
+    # Respond ephemerally to the user who ran the command
+    await interaction.response.send_message(
+        f"Automated systems check initiated.\n"
+        f"Part 1 sent to <#{current_chan_id}>.\n"
+        f"Part 2 scheduled for `{post_time_str} UTC` in <#{default_chan_id}>.", 
         ephemeral=True
     )
 
